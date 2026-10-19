@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
+  <title>Brickforge</title>
+  <link href="https://fonts.googleapis.com/css2?family=Syne:wght@700;800&family=IBM+Plex+Sans:wght@400;600&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --bg0: #e9eef3; --bg1: #d5dde8; --ink: #13202c; --muted: #5b6d7c;
+      --accent: #d4551a; --panel: rgba(255,255,255,0.72);
+      --display: "Syne", system-ui, sans-serif; --body: "IBM Plex Sans", system-ui, sans-serif;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      min-height: 100vh; font-family: var(--body); color: var(--ink);
+      background:
+        radial-gradient(900px 480px at 100% 0%, rgba(212,85,26,0.16), transparent 50%),
+        radial-gradient(700px 400px at 0% 100%, rgba(40,90,130,0.14), transparent 55%),
+        linear-gradient(165deg, var(--bg0), var(--bg1));
+      display: grid; place-items: center; padding: 1rem;
+    }
+    .shell { width: min(100%, 480px); }
+    header { display: flex; justify-content: space-between; align-items: end; margin-bottom: 0.75rem; }
+    h1 { font-family: var(--display); font-size: 1.7rem; letter-spacing: -0.03em; }
+    h1 span { color: var(--accent); }
+    .stats { text-align: right; font-size: 0.85rem; color: var(--muted); }
+    .stats b { color: var(--ink); font-family: var(--display); }
+    .stage {
+      position: relative; border-radius: 14px; overflow: hidden;
+      border: 1px solid rgba(19,32,44,0.1); background: #1a2433; box-shadow: 0 20px 50px rgba(19,32,44,0.12);
+    }
+    canvas { display: block; width: 100%; height: auto; touch-action: none; }
+    .overlay {
+      position: absolute; inset: 0; display: grid; place-items: center; text-align: center;
+      background: rgba(14,20,30,0.82); color: #eef3f8; padding: 1.25rem;
+    }
+    .overlay.hidden { display: none; }
+    .overlay h2 { font-family: var(--display); font-size: 1.7rem; margin-bottom: 0.4rem; }
+    .overlay p { color: #9eb0c2; margin-bottom: 1rem; line-height: 1.5; }
+    button {
+      border: 0; cursor: pointer; font-family: var(--display); font-weight: 800;
+      background: var(--accent); color: #fff; padding: 0.75rem 1.2rem; border-radius: 8px;
+    }
+    .hint { margin-top: 0.75rem; font-size: 0.8rem; color: var(--muted); }
+    footer { margin-top: 0.85rem; display: flex; justify-content: space-between; font-size: 0.75rem; color: var(--muted); }
+    a { color: var(--accent); }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <header>
+      <h1>Brick<span>forge</span></h1>
+      <div class="stats">
+        <div>Score <b id="score">0</b></div>
+        <div>Lives <b id="lives">3</b> · Best <b id="best">0</b></div>
+      </div>
+    </header>
+    <div class="stage">
+      <canvas id="c" width="450" height="560"></canvas>
+      <div class="overlay" id="start">
+        <div>
+          <h2>Forge the bricks</h2>
+          <p>Move with mouse / touch / ← →<br/>Break all bricks. Catch power-ups.</p>
+          <button id="go">START</button>
+        </div>
+      </div>
+      <div class="overlay hidden" id="end">
+        <div>
+          <h2 id="endTitle">Cleared</h2>
+          <p>Score <b id="final">0</b></p>
+          <button id="again">PLAY AGAIN</button>
+        </div>
+      </div>
+    </div>
+    <p class="hint">Power-ups: wide paddle · multi-ball · slow</p>
+    <footer>
+      <span>Original game by Kian Zarandi</span>
+      <a href="https://github.com/kianPk/brickforge">GitHub</a>
+    </footer>
+  </div>
+  <script>
+    const canvas = document.getElementById("c");
+    const ctx = canvas.getContext("2d");
+    const W = canvas.width, H = canvas.height;
+    const BEST = "brickforge-best";
+    const $ = (id) => document.getElementById(id);
+
+    let paddle, balls, bricks, particles, drops, score, lives, running, win;
+    const colors = ["#d4551a", "#e08a3c", "#4f8fbf", "#3fbf8f", "#c45c8a", "#8b7ae0"];
+
+    function reset() {
+      score = 0; lives = 3; running = true; win = false; particles = []; drops = [];
+      paddle = { x: W / 2 - 50, y: H - 36, w: 100, h: 12, wideUntil: 0 };
+      balls = [makeBall()];
+      bricks = [];
+      const rows = 6, cols = 9, bw = 44, bh = 16, gap = 4, ox = 18, oy = 48;
+      for (let r = 0; r < rows; r++) {
+        for (let c = 0; c < cols; c++) {
+          bricks.push({
+            x: ox + c * (bw + gap), y: oy + r * (bh + gap),
+            w: bw, h: bh, hp: r < 2 ? 2 : 1, color: colors[r % colors.length], alive: true
+          });
+        }
+      }
+      $("start").classList.add("hidden");
+      $("end").classList.add("hidden");
+      hud();
+    }
+
+    function makeBall(x = W / 2, y = H - 60, vx = 2.6 * (Math.random() > 0.5 ? 1 : -1), vy = -3.4) {
+      return { x, y, vx, vy, r: 6, slowUntil: 0 };
+    }
+
+    function hud() {
+      $("score").textContent = score;
+      $("lives").textContent = lives;
+      $("best").textContent = localStorage.getItem(BEST) || 0;
+    }
+
+    function burst(x, y, color) {
+      for (let i = 0; i < 10; i++) {
+        particles.push({
+          x, y, vx: (Math.random() - 0.5) * 4, vy: (Math.random() - 0.5) * 4,
+          life: 30 + Math.random() * 20, color
+        });
+      }
+    }
+
+    function spawnDrop(brick) {
+      if (Math.random() > 0.22) return;
+      const kinds = ["wide", "multi", "slow"];
+      drops.push({ x: brick.x + brick.w / 2, y: brick.y + brick.h, kind: kinds[Math.floor(Math.random() * kinds.length)], vy: 2.2 });
+    }
+
+    function step() {
+      if (!running) return;
+      const now = performance.now();
+      const pw = now < paddle.wideUntil ? 140 : 100;
+      paddle.w = pw;
+
+      for (const b of balls) {
+        const speedScale = now < b.slowUntil ? 0.65 : 1;
+        b.x += b.vx * speedScale;
+        b.y += b.vy * speedScale;
+        if (b.x < b.r || b.x > W - b.r) b.vx *= -1;
+        if (b.y < b.r) b.vy *= -1;
+        if (b.y > H + 20) b.dead = true;
+
+        if (b.y + b.r >= paddle.y && b.y - b.r <= paddle.y + paddle.h &&
+            b.x >= paddle.x && b.x <= paddle.x + paddle.w && b.vy > 0) {
+          const hit = (b.x - (paddle.x + paddle.w / 2)) / (paddle.w / 2);
+          b.vx = hit * 4.2;
+          b.vy = -Math.abs(b.vy);
+          b.y = paddle.y - b.r;
+        }
+
+        for (const br of bricks) {
+          if (!br.alive) continue;
+          if (b.x + b.r > br.x && b.x - b.r < br.x + br.w && b.y + b.r > br.y && b.y - b.r < br.y + br.h) {
+            const overlapX = Math.min(b.x + b.r - br.x, br.x + br.w - (b.x - b.r));
+            const overlapY = Math.min(b.y + b.r - br.y, br.y + br.h - (b.y - b.r));
+            if (overlapX < overlapY) b.vx *= -1; else b.vy *= -1;
+            br.hp--;
+            if (br.hp <= 0) {
+              br.alive = false; score += 25; spawnDrop(br);
+              burst(br.x + br.w / 2, br.y + br.h / 2, br.color);
+            } else { score += 10; br.color = "#f0c27a"; }
+          }
+        }
+      }
+
+      balls = balls.filter((b) => !b.dead);
+      if (balls.length === 0) {
+        lives--;
+        if (lives <= 0) {
+          running = false;
+          const best = Number(localStorage.getItem(BEST) || 0);
+          if (score > best) localStorage.setItem(BEST, String(score));
+          $("endTitle").textContent = "Game Over";
+          $("final").textContent = score;
+          $("end").classList.remove("hidden");
+        } else balls = [makeBall()];
+      }
+
+      for (const d of drops) {
+        d.y += d.vy;
+        if (d.y > paddle.y && d.y < paddle.y + paddle.h && d.x > paddle.x && d.x < paddle.x + paddle.w) {
+          d.got = true;
+          if (d.kind === "wide") paddle.wideUntil = now + 8000;
+          if (d.kind === "multi") {
+            const base = balls[0] || makeBall();
+            balls.push(makeBall(base.x, base.y, -Math.abs(base.vx), base.vy));
+            balls.push(makeBall(base.x, base.y, Math.abs(base.vx), base.vy));
+          }
+          if (d.kind === "slow") balls.forEach((b) => b.slowUntil = now + 6000);
+        }
+      }
+      drops = drops.filter((d) => !d.got && d.y < H);
+
+      particles.forEach((p) => { p.x += p.vx; p.y += p.vy; p.life--; });
+      particles = particles.filter((p) => p.life > 0);
+
+      if (bricks.every((b) => !b.alive)) {
+        running = false; win = true;
+        const best = Number(localStorage.getItem(BEST) || 0);
+        if (score > best) localStorage.setItem(BEST, String(score));
+        $("endTitle").textContent = "Stage Cleared";
+        $("final").textContent = score;
+        $("end").classList.remove("hidden");
+      }
+      hud();
+    }
+
+    function draw() {
+      ctx.fillStyle = "#152033";
+      ctx.fillRect(0, 0, W, H);
+      const g = ctx.createLinearGradient(0, 0, 0, 120);
+      g.addColorStop(0, "rgba(212,85,26,0.15)"); g.addColorStop(1, "transparent");
+      ctx.fillStyle = g; ctx.fillRect(0, 0, W, 120);
+
+      for (const br of bricks) {
+        if (!br.alive) continue;
+        ctx.fillStyle = br.color;
+        roundRect(br.x, br.y, br.w, br.h, 4);
+        ctx.fill();
+      }
+      for (const d of drops) {
+        ctx.fillStyle = d.kind === "wide" ? "#4f8fbf" : d.kind === "multi" ? "#3fbf8f" : "#e08a3c";
+        ctx.beginPath(); ctx.arc(d.x, d.y, 7, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = "#fff"; ctx.font = "9px sans-serif"; ctx.textAlign = "center";
+        ctx.fillText(d.kind[0].toUpperCase(), d.x, d.y + 3);
+      }
+      for (const p of particles) {
+        ctx.globalAlpha = Math.max(0, p.life / 40);
+        ctx.fillStyle = p.color; ctx.fillRect(p.x, p.y, 3, 3); ctx.globalAlpha = 1;
+      }
+      ctx.fillStyle = "#f2f6fa";
+      roundRect(paddle.x, paddle.y, paddle.w, paddle.h, 6); ctx.fill();
+      for (const b of balls) {
+        ctx.fillStyle = "#ffd29a";
+        ctx.beginPath(); ctx.arc(b.x, b.y, b.r, 0, Math.PI * 2); ctx.fill();
+      }
+    }
+
+    function roundRect(x, y, w, h, r) {
+      ctx.beginPath();
+      ctx.moveTo(x + r, y);
+      ctx.arcTo(x + w, y, x + w, y + h, r);
+      ctx.arcTo(x + w, y + h, x, y + h, r);
+      ctx.arcTo(x, y + h, x, y, r);
+      ctx.arcTo(x, y, x + w, y, r);
+      ctx.closePath();
+    }
+
+    function loop() { step(); draw(); requestAnimationFrame(loop); }
+
+    function movePaddle(clientX) {
+      const rect = canvas.getBoundingClientRect();
+      const x = ((clientX - rect.left) / rect.width) * W;
+      paddle.x = Math.max(0, Math.min(W - paddle.w, x - paddle.w / 2));
+    }
+
+    canvas.addEventListener("mousemove", (e) => running && movePaddle(e.clientX));
+    canvas.addEventListener("touchmove", (e) => {
+      if (!running) return;
+      movePaddle(e.touches[0].clientX);
+      e.preventDefault();
+    }, { passive: false });
+    window.addEventListener("keydown", (e) => {
+      if (!running) return;
+      if (e.key === "ArrowLeft") paddle.x = Math.max(0, paddle.x - 24);
+      if (e.key === "ArrowRight") paddle.x = Math.min(W - paddle.w, paddle.x + 24);
+    });
+
+    $("go").onclick = reset;
+    $("again").onclick = reset;
+    $("best").textContent = localStorage.getItem(BEST) || 0;
+    requestAnimationFrame(loop);
+  </script>
+</body>
+</html>
