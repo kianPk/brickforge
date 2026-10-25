@@ -61,8 +61,15 @@
       <div class="overlay" id="start">
         <div>
           <h2>Forge the bricks</h2>
-          <p>Move with mouse / touch / ← →<br/>Break all bricks. Catch power-ups.</p>
+          <p>Move with mouse / touch / ← →<br/>Break bricks. Catch wide-paddle power-ups.<br/>Press <b>P</b> to pause.</p>
           <button id="go">START</button>
+        </div>
+      </div>
+      <div class="overlay hidden" id="pause">
+        <div>
+          <h2>Paused</h2>
+          <p>Press <b>P</b> or resume to continue</p>
+          <button id="resume">RESUME</button>
         </div>
       </div>
       <div class="overlay hidden" id="end">
@@ -73,7 +80,7 @@
         </div>
       </div>
     </div>
-    <p class="hint">Power-ups: wide paddle · multi-ball · slow</p>
+    <p class="hint">Power-up: wider paddle (~22% drop chance on brick break) · P to pause</p>
     <footer>
       <span>Original game by Kian Zarandi</span>
       <a href="https://github.com/kianPk/brickforge">GitHub</a>
@@ -84,14 +91,25 @@
     const ctx = canvas.getContext("2d");
     const W = canvas.width, H = canvas.height;
     const BEST = "brickforge-best";
+    const PADDLE_W = 100, PADDLE_WIDE = 160, WIDE_MS = 9000;
     const $ = (id) => document.getElementById(id);
 
-    let paddle, balls, bricks, particles, drops, score, lives, running, win;
+    let paddle, balls, bricks, particles, drops, score, lives, running, paused, win;
     const colors = ["#d4551a", "#e08a3c", "#4f8fbf", "#3fbf8f", "#c45c8a", "#8b7ae0"];
 
+    function loadBest() {
+      return Number(localStorage.getItem(BEST) || 0);
+    }
+
+    function saveBest() {
+      const best = loadBest();
+      if (score > best) localStorage.setItem(BEST, String(score));
+    }
+
     function reset() {
-      score = 0; lives = 3; running = true; win = false; particles = []; drops = [];
-      paddle = { x: W / 2 - 50, y: H - 36, w: 100, h: 12, wideUntil: 0 };
+      score = 0; lives = 3; running = true; paused = false; win = false;
+      particles = []; drops = [];
+      paddle = { x: W / 2 - PADDLE_W / 2, y: H - 36, w: PADDLE_W, h: 12, wideUntil: 0 };
       balls = [makeBall()];
       bricks = [];
       const rows = 6, cols = 9, bw = 44, bh = 16, gap = 4, ox = 18, oy = 48;
@@ -105,17 +123,24 @@
       }
       $("start").classList.add("hidden");
       $("end").classList.add("hidden");
+      $("pause").classList.add("hidden");
       hud();
     }
 
     function makeBall(x = W / 2, y = H - 60, vx = 2.6 * (Math.random() > 0.5 ? 1 : -1), vy = -3.4) {
-      return { x, y, vx, vy, r: 6, slowUntil: 0 };
+      return { x, y, vx, vy, r: 6 };
     }
 
     function hud() {
       $("score").textContent = score;
       $("lives").textContent = lives;
-      $("best").textContent = localStorage.getItem(BEST) || 0;
+      $("best").textContent = loadBest();
+    }
+
+    function setPaused(on) {
+      if (!running || win) return;
+      paused = on;
+      $("pause").classList.toggle("hidden", !on);
     }
 
     function burst(x, y, color) {
@@ -128,21 +153,19 @@
     }
 
     function spawnDrop(brick) {
+      // Occasional wider-paddle power-up on brick break
       if (Math.random() > 0.22) return;
-      const kinds = ["wide", "multi", "slow"];
-      drops.push({ x: brick.x + brick.w / 2, y: brick.y + brick.h, kind: kinds[Math.floor(Math.random() * kinds.length)], vy: 2.2 });
+      drops.push({ x: brick.x + brick.w / 2, y: brick.y + brick.h, kind: "wide", vy: 2.2 });
     }
 
     function step() {
-      if (!running) return;
+      if (!running || paused) return;
       const now = performance.now();
-      const pw = now < paddle.wideUntil ? 140 : 100;
-      paddle.w = pw;
+      paddle.w = now < paddle.wideUntil ? PADDLE_WIDE : PADDLE_W;
 
       for (const b of balls) {
-        const speedScale = now < b.slowUntil ? 0.65 : 1;
-        b.x += b.vx * speedScale;
-        b.y += b.vy * speedScale;
+        b.x += b.vx;
+        b.y += b.vy;
         if (b.x < b.r || b.x > W - b.r) b.vx *= -1;
         if (b.y < b.r) b.vy *= -1;
         if (b.y > H + 20) b.dead = true;
@@ -175,8 +198,7 @@
         lives--;
         if (lives <= 0) {
           running = false;
-          const best = Number(localStorage.getItem(BEST) || 0);
-          if (score > best) localStorage.setItem(BEST, String(score));
+          saveBest();
           $("endTitle").textContent = "Game Over";
           $("final").textContent = score;
           $("end").classList.remove("hidden");
@@ -187,13 +209,7 @@
         d.y += d.vy;
         if (d.y > paddle.y && d.y < paddle.y + paddle.h && d.x > paddle.x && d.x < paddle.x + paddle.w) {
           d.got = true;
-          if (d.kind === "wide") paddle.wideUntil = now + 8000;
-          if (d.kind === "multi") {
-            const base = balls[0] || makeBall();
-            balls.push(makeBall(base.x, base.y, -Math.abs(base.vx), base.vy));
-            balls.push(makeBall(base.x, base.y, Math.abs(base.vx), base.vy));
-          }
-          if (d.kind === "slow") balls.forEach((b) => b.slowUntil = now + 6000);
+          paddle.wideUntil = now + WIDE_MS;
         }
       }
       drops = drops.filter((d) => !d.got && d.y < H);
@@ -203,8 +219,7 @@
 
       if (bricks.every((b) => !b.alive)) {
         running = false; win = true;
-        const best = Number(localStorage.getItem(BEST) || 0);
-        if (score > best) localStorage.setItem(BEST, String(score));
+        saveBest();
         $("endTitle").textContent = "Stage Cleared";
         $("final").textContent = score;
         $("end").classList.remove("hidden");
@@ -226,18 +241,20 @@
         ctx.fill();
       }
       for (const d of drops) {
-        ctx.fillStyle = d.kind === "wide" ? "#4f8fbf" : d.kind === "multi" ? "#3fbf8f" : "#e08a3c";
+        ctx.fillStyle = "#4f8fbf";
         ctx.beginPath(); ctx.arc(d.x, d.y, 7, 0, Math.PI * 2); ctx.fill();
         ctx.fillStyle = "#fff"; ctx.font = "9px sans-serif"; ctx.textAlign = "center";
-        ctx.fillText(d.kind[0].toUpperCase(), d.x, d.y + 3);
+        ctx.fillText("W", d.x, d.y + 3);
       }
       for (const p of particles) {
         ctx.globalAlpha = Math.max(0, p.life / 40);
         ctx.fillStyle = p.color; ctx.fillRect(p.x, p.y, 3, 3); ctx.globalAlpha = 1;
       }
-      ctx.fillStyle = "#f2f6fa";
-      roundRect(paddle.x, paddle.y, paddle.w, paddle.h, 6); ctx.fill();
-      for (const b of balls) {
+      ctx.fillStyle = performance.now() < (paddle?.wideUntil || 0) ? "#7ec8ff" : "#f2f6fa";
+      if (paddle) {
+        roundRect(paddle.x, paddle.y, paddle.w, paddle.h, 6); ctx.fill();
+      }
+      for (const b of balls || []) {
         ctx.fillStyle = "#ffd29a";
         ctx.beginPath(); ctx.arc(b.x, b.y, b.r, 0, Math.PI * 2); ctx.fill();
       }
@@ -256,26 +273,34 @@
     function loop() { step(); draw(); requestAnimationFrame(loop); }
 
     function movePaddle(clientX) {
+      if (!paddle || !running || paused) return;
       const rect = canvas.getBoundingClientRect();
       const x = ((clientX - rect.left) / rect.width) * W;
       paddle.x = Math.max(0, Math.min(W - paddle.w, x - paddle.w / 2));
     }
 
-    canvas.addEventListener("mousemove", (e) => running && movePaddle(e.clientX));
+    canvas.addEventListener("mousemove", (e) => movePaddle(e.clientX));
     canvas.addEventListener("touchmove", (e) => {
-      if (!running) return;
       movePaddle(e.touches[0].clientX);
       e.preventDefault();
     }, { passive: false });
     window.addEventListener("keydown", (e) => {
-      if (!running) return;
+      if (e.key === "p" || e.key === "P") {
+        if (running && $("end").classList.contains("hidden") && $("start").classList.contains("hidden")) {
+          e.preventDefault();
+          setPaused(!paused);
+        }
+        return;
+      }
+      if (!running || paused || !paddle) return;
       if (e.key === "ArrowLeft") paddle.x = Math.max(0, paddle.x - 24);
       if (e.key === "ArrowRight") paddle.x = Math.min(W - paddle.w, paddle.x + 24);
     });
 
     $("go").onclick = reset;
     $("again").onclick = reset;
-    $("best").textContent = localStorage.getItem(BEST) || 0;
+    $("resume").onclick = () => setPaused(false);
+    $("best").textContent = loadBest();
     requestAnimationFrame(loop);
   </script>
 </body>
